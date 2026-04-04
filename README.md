@@ -44,10 +44,7 @@ ancient-bridges-story/
 3. 推荐使用 VSCode + Live Server
 ---
 ### 在线访问
-👉 GitHub Pages 地址（部署后填写）：
-```
-https://你的用户名.github.io/ancient-bridges-story/
-```
+👉 https://zlw-z.github.io/ancient-bridges-story/
 ---
 
 ## 功能说明
