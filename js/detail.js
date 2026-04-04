@@ -185,46 +185,49 @@
     buildSideTags(item);
   }
 
-  function initMap(item) {
-    const chinaBounds = L.latLngBounds(
-      [16.5, 72.0],
-      [54.5, 136.5]
-    );
+async function initMap(item) {
+  const map = L.map("detailMap", {
+    zoomControl: false,
+    attributionControl: false,
+    minZoom: 3,
+    maxZoom: 8
+  }).setView([35.2, 104.5], 4);
 
-    const map = L.map("detailMap", {
-      zoomControl: false,
-      attributionControl: false,
-      minZoom: 3,
-      maxZoom: 9,
-      maxBounds: chinaBounds,
-      maxBoundsViscosity: 0.9
-    }).setView([35.2, 104.5], 4);
+  const response = await fetch("assets/geo/china-provinces.geojson");
+  const chinaGeoJson = await response.json();
 
-    map.createPane("mutedTiles");
-    map.getPane("mutedTiles").classList.add("muted-tile-pane");
+  const geoLayer = L.geoJSON(chinaGeoJson, {
+    style: function () {
+      return {
+        color: "rgba(150, 125, 88, 0.55)",
+        weight: 1,
+        fillColor: "rgba(231, 220, 203, 0.85)",
+        fillOpacity: 0.95
+      };
+    }
+  }).addTo(map);
 
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      pane: "mutedTiles",
-      maxZoom: 18
-    }).addTo(map);
+  map.fitBounds(geoLayer.getBounds(), {
+    padding: [20, 20]
+  });
 
-    if (item && item.lat && item.lng) {
-      const pointColor = getPointColor(item.type);
+  if (item && item.lat && item.lng) {
+    const pointColor = getPointColor(item.type);
 
-      L.circleMarker([item.lat, item.lng], {
-        radius: 8,
-        color: pointColor,
-        fillColor: pointColor,
-        fillOpacity: 0.84,
-        weight: 1.6
-      })
+    L.circleMarker([item.lat, item.lng], {
+      radius: 8,
+      color: pointColor,
+      fillColor: pointColor,
+      fillOpacity: 0.84,
+      weight: 1.6
+    })
       .bindPopup(`<strong>${item.name || "未命名桥梁"}</strong>`)
       .addTo(map)
       .openPopup();
 
-      map.flyTo([item.lat, item.lng], 7, { duration: 1.4 });
-    }
+    map.flyTo([item.lat, item.lng], 7, { duration: 1.4 });
   }
+}
 
   function initFadeIn() {
     const targets = document.querySelectorAll(".fade-in-up");

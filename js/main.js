@@ -43,6 +43,8 @@
   splitLineDark: "rgba(255,255,255,0.08)"
 };
 
+  const CHINA_GEOJSON_PATH = "assets/geo/china-provinces.geojson";
+
   function normalizeDynasty(d) {
     return (d || "未知").trim();
   }
@@ -164,30 +166,34 @@
         };
 }
 
-  function createMutedChinaMap(containerId, center = [35.2, 104.5], zoom = 4) {
-  const chinaBounds = L.latLngBounds(
-    [16.5, 72.0],   // 西南角
-    [54.5, 136.5]   // 东北角
-  );
-
+ async function createChinaGeoMap(containerId, center = [35.2, 104.5], zoom = 4) {
   const map = L.map(containerId, {
     zoomControl: false,
     attributionControl: false,
     minZoom: 3,
-    maxZoom: 9,
-    maxBounds: chinaBounds,
-    maxBoundsViscosity: 0.9
+    maxZoom: 8
   }).setView(center, zoom);
 
-  map.createPane("mutedTiles");
-  map.getPane("mutedTiles").classList.add("muted-tile-pane");
+  const response = await fetch(CHINA_GEOJSON_PATH);
+  const chinaGeoJson = await response.json();
 
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    pane: "mutedTiles",
-    maxZoom: 18
+  const geoLayer = L.geoJSON(chinaGeoJson, {
+    style: function () {
+      return {
+        color: "rgba(150, 125, 88, 0.55)",
+        weight: 1,
+        fillColor: "rgba(231, 220, 203, 0.85)",
+        fillOpacity: 0.95
+      };
+    }
   }).addTo(map);
 
-  return map;
+  const bounds = geoLayer.getBounds();
+  map.fitBounds(bounds, {
+    padding: [20, 20]
+  });
+
+  return { map, geoLayer, bounds };
 }
 
   function makeNarrative(bridge) {
@@ -240,14 +246,15 @@
     document.getElementById("dynastyCount").textContent = dynastyCount;
   }
 
-  function initOverviewMap() {
-    const map = createMutedChinaMap("overviewMap", [35.2, 104.5], 4);
+  async function initOverviewMap() {
+  const { map } = await createChinaGeoMap("overviewMap", [35.2, 104.5], 4);
 
-    bridgeData.forEach(item => {
-      if (!item.lat || !item.lng) return;
-      const markerStyle = getBridgeMarkerStyle(item, "overview");
+  bridgeData.forEach(item => {
+    if (!item.lat || !item.lng) return;
 
-      L.circleMarker([item.lat, item.lng], markerStyle)
+    const markerStyle = getBridgeMarkerStyle(item, "overview");
+
+    L.circleMarker([item.lat, item.lng], markerStyle)
       .bindPopup(
         `<strong>${item.name || "未命名桥梁"}</strong>${isFeaturedBridge(item) ? ' <span style="color:#A88447;">★重点桥梁</span>' : ''}<br>` +
         `朝代：${item.dynasty || "未知"}<br>` +
@@ -255,10 +262,10 @@
         `建材：${item.material || "未知"}`
       )
       .addTo(map);
-    });
+  });
 
-    return map;
-  }
+  return map;
+}
 
   function renderHorizontalBar(chartDomId, dataObj, title, color) {
   const chart = echarts.init(document.getElementById(chartDomId));
@@ -364,294 +371,305 @@
     window.addEventListener("resize", () => dynastyChart.resize());
   }
 
-  function initTimelineSection() {
-    const timelineGroups = toTimelineGroups(bridgeData);
-    const slider = document.getElementById("timelineSlider");
-    const playPauseBtn = document.getElementById("playPauseBtn");
-    const currentLabel = document.getElementById("timelineCurrentLabel");
-    const badge = document.getElementById("currentDynastyBadge");
-    const infoCard = document.getElementById("bridgeInfoCard");
-    const caption = document.getElementById("timelineCaption");
-    const mapWrap = document.getElementById("timelineMapWrap");
-    const svgLayer = document.getElementById("timelineLinkLayer");
+async function initTimelineSection() {
+  const timelineGroups = toTimelineGroups(bridgeData);
+  const slider = document.getElementById("timelineSlider");
+  const playPauseBtn = document.getElementById("playPauseBtn");
+  const currentLabel = document.getElementById("timelineCurrentLabel");
+  const badge = document.getElementById("currentDynastyBadge");
+  const infoCard = document.getElementById("bridgeInfoCard");
+  const caption = document.getElementById("timelineCaption");
+  const mapWrap = document.getElementById("timelineMapWrap");
+  const svgLayer = document.getElementById("timelineLinkLayer");
 
-    slider.max = Math.max(0, timelineGroups.length - 1);
+  slider.max = Math.max(0, timelineGroups.length - 1);
 
-    const map = createMutedChinaMap("timelineMap", [35.2, 104.5], 4);
+  const mapResult = await createChinaGeoMap("timelineMap", [35.2, 104.5], 4);
+  const map = mapResult.map;
 
-    const typeChart = echarts.init(document.getElementById("timelineTypeChart"));
+  const typeChart = echarts.init(document.getElementById("timelineTypeChart"));
 
-    let currentIndex = 0;
-    let isPlaying = false;
-    let timer = null;
-    let markerLayers = [];
-    let activeBridge = null;
+  let currentIndex = 0;
+  let isPlaying = false;
+  let timer = null;
+  let markerLayers = [];
+  let activeBridge = null;
 
-    function clearMarkers() {
-      markerLayers.forEach(layer => map.removeLayer(layer));
-      markerLayers = [];
+  function clearMarkers() {
+    markerLayers.forEach(layer => map.removeLayer(layer));
+    markerLayers = [];
+  }
+
+  function clearConnector() {
+    while (svgLayer.firstChild) svgLayer.removeChild(svgLayer.firstChild);
+  }
+
+  function renderInfoCard(bridge, dynasty, totalCount) {
+    if (!bridge) {
+      infoCard.innerHTML = `<div class="empty-info">当前阶段暂无桥梁信息。</div>`;
+      return;
     }
 
-    function clearConnector() {
-      while (svgLayer.firstChild) svgLayer.removeChild(svgLayer.firstChild);
-    }
-
-    function renderInfoCard(bridge, dynasty, totalCount) {
-      if (!bridge) {
-        infoCard.innerHTML = `<div class="empty-info">当前阶段暂无桥梁信息。</div>`;
-        return;
-      }
-
-      infoCard.innerHTML = `
-        <div class="bridge-info-name">${bridge.name || "未命名桥梁"}</div>
-        <div class="bridge-info-meta">
-          <span class="bridge-meta-tag">${bridge.dynasty || "未知朝代"}</span>
-          <span class="bridge-meta-tag">${bridge.type || "未知类型"}</span>
-          <span class="bridge-meta-tag">${bridge.material || "未知建材"}</span>
+    infoCard.innerHTML = `
+      <div class="bridge-info-name">
+        ${bridge.name || "未命名桥梁"}
+        ${isFeaturedBridge(bridge) ? '<span style="display:inline-block;margin-left:10px;font-size:14px;color:#E6C07B;">★重点桥梁</span>' : ''}
+      </div>
+      <div class="bridge-info-meta">
+        <span class="bridge-meta-tag">${bridge.dynasty || "未知朝代"}</span>
+        <span class="bridge-meta-tag">${bridge.type || "未知类型"}</span>
+        <span class="bridge-meta-tag">${bridge.material || "未知建材"}</span>
+      </div>
+      <div class="bridge-info-text">
+        <div>位置：${bridge.location || "未知"}</div>
+        <div>批次：${bridge.batch || "未知"}</div>
+        <div>年代：${bridge.year || "待考"}</div>
+        <div style="margin-top:10px;">
+          当前时间阶段为 <strong>${dynasty}</strong>，本阶段共展示 <strong>${totalCount}</strong> 条桥梁记录。
         </div>
-        <div class="bridge-info-text">
-          <div>位置：${bridge.location || "未知"}</div>
-          <div>批次：${bridge.batch || "未知"}</div>
-          <div>年代：${bridge.year || "待考"}</div>
-          <div style="margin-top:10px;">
-            当前时间阶段为 <strong>${dynasty}</strong>，本阶段共展示 <strong>${totalCount}</strong> 条桥梁记录。
-            当前高亮桥梁作为代表个案，用于展示该阶段桥梁的空间位置与基本属性。
-          </div>
-        </div>
-        <div class="bridge-info-action">
-          <button class="ghost-btn light-border" id="viewDetailBtn">查看桥梁详情</button>
-        </div>
-      `;
+      </div>
+      <div class="bridge-info-action">
+        <button class="ghost-btn light-border" id="viewDetailBtn">查看桥梁详情</button>
+      </div>
+    `;
 
-      const viewDetailBtn = document.getElementById("viewDetailBtn");
-      if (viewDetailBtn) {
-        viewDetailBtn.addEventListener("click", () => {
-          window.location.href = `bridge_detail.html?id=${bridge.id}`;
-        });
-      }
+    const viewDetailBtn = document.getElementById("viewDetailBtn");
+    if (viewDetailBtn) {
+      viewDetailBtn.addEventListener("click", () => {
+        window.location.href = `bridge_detail.html?id=${bridge.id}`;
+      });
     }
+  }
 
-    function drawConnectorToInfo(markerLatLng) {
-      clearConnector();
+  function drawConnectorToInfo(markerLatLng) {
+    clearConnector();
+    if (!markerLatLng) return;
 
-      if (!markerLatLng) return;
+    const point = map.latLngToContainerPoint(markerLatLng);
+    const mapRect = mapWrap.getBoundingClientRect();
 
-      const point = map.latLngToContainerPoint(markerLatLng);
-      const mapRect = mapWrap.getBoundingClientRect();
+    const startX = point.x;
+    const startY = point.y;
+    const endX = mapRect.width - 22;
+    const endY = Math.max(80, mapRect.height * 0.28);
 
-      const startX = point.x;
-      const startY = point.y;
-      const endX = mapRect.width - 22;
-      const endY = Math.max(80, mapRect.height * 0.28);
+    const polyline = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    polyline.setAttribute(
+      "d",
+      `M ${startX} ${startY} C ${startX + 80} ${startY}, ${endX - 120} ${endY}, ${endX} ${endY}`
+    );
+    polyline.setAttribute("class", "timeline-connector-line");
+    svgLayer.appendChild(polyline);
+  }
 
-      const polyline = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      polyline.setAttribute(
-        "d",
-        `M ${startX} ${startY} C ${startX + 80} ${startY}, ${endX - 120} ${endY}, ${endX} ${endY}`
-      );
-      polyline.setAttribute("class", "timeline-connector-line");
-      svgLayer.appendChild(polyline);
-    }
+  function renderTimelineTypeChart(list, dynasty) {
+    const typeCount = countBy(list.filter(item => item.type), item => item.type);
+    const entries = sortedEntries(typeCount, true);
+    const names = entries.map(item => item[0]).reverse();
+    const values = entries.map(item => item[1]).reverse();
 
-    function renderTimelineTypeChart(list, dynasty) {
-      const typeCount = countBy(list.filter(item => item.type), item => item.type);
-      const entries = sortedEntries(typeCount, true);
-      const names = entries.map(item => item[0]).reverse();
-      const values = entries.map(item => item[1]).reverse();
-
-      typeChart.setOption({
-        animationDuration: 900,
-        animationEasing: "cubicOut",
-        grid: { top: 18, left: 70, right: 26, bottom: 16, containLabel: true },
-        tooltip: {
-            trigger: "axis",
-            axisPointer: { type: "shadow" },
-            backgroundColor: "rgba(37,47,51,0.95)",
-            borderColor: "rgba(199,164,106,0.16)",
-            borderWidth: 1,
-            textStyle: { color: "rgba(255,245,229,0.92)" }
+    typeChart.setOption({
+      animationDuration: 900,
+      animationEasing: "cubicOut",
+      grid: { top: 18, left: 70, right: 26, bottom: 16, containLabel: true },
+      tooltip: {
+        trigger: "axis",
+        axisPointer: { type: "shadow" },
+        backgroundColor: "rgba(37,47,51,0.95)",
+        borderColor: "rgba(199,164,106,0.16)",
+        borderWidth: 1,
+        textStyle: { color: "rgba(255,245,229,0.92)" }
+      },
+      xAxis: {
+        type: "value",
+        axisLine: { show: false },
+        axisTick: { show: false },
+        splitLine: { lineStyle: { color: chartColors.splitLineDark } },
+        axisLabel: { color: chartColors.lightText }
+      },
+      yAxis: {
+        type: "category",
+        data: names,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: chartColors.lightText }
+      },
+      series: [{
+        type: "bar",
+        data: values,
+        barWidth: 16,
+        itemStyle: {
+          color: chartColors.accent,
+          borderRadius: [0, 10, 10, 0]
         },
-        xAxis: {
-            type: "value",
-            axisLine: { show: false },
-            axisTick: { show: false },
-            splitLine: { lineStyle: { color: chartColors.splitLineDark } },
-            axisLabel: { color: chartColors.lightText }
-        },
-        yAxis: {
-            type: "category",
-            data: names,
-            axisLine: { show: false },
-            axisTick: { show: false },
-            axisLabel: { color: chartColors.lightText }
-        },
-        series: [{
-            type: "bar",
-            data: values,
-            barWidth: 16,
-            itemStyle: {
-            color: chartColors.accent,
-            borderRadius: [0, 10, 10, 0]
-            },
-            label: {
-            show: true,
-            position: "right",
-            color: "rgba(255,245,229,0.88)"
-            }
-        }]
+        label: {
+          show: true,
+          position: "right",
+          color: "rgba(255,245,229,0.88)"
+        }
+      }]
     });
 
-      caption.textContent = `当前展示阶段：${dynasty}。地图将聚焦该阶段桥梁分布区域，右侧显示当前代表桥梁信息，柱状图展示该阶段桥型构成。`;
+    caption.textContent = `当前展示阶段：${dynasty}。地图将聚焦该阶段桥梁分布区域，右侧显示当前代表桥梁信息，柱状图展示该阶段桥型构成。`;
+  }
+
+  function fitToGroup(list) {
+    const valid = list.filter(item => item.lat && item.lng);
+    if (!valid.length) {
+      map.setView([35.2, 104.5], 4);
+      return;
     }
 
-    function fitToGroup(list) {
-      const valid = list.filter(item => item.lat && item.lng);
-      if (!valid.length) {
-        map.flyTo([35.2, 104.5], 4, { duration: 1.4 });
-        return;
-      }
-
-      if (valid.length === 1) {
-        map.flyTo([valid[0].lat, valid[0].lng], 7, { duration: 1.4 });
-        return;
-      }
-
-      const bounds = L.latLngBounds(valid.map(item => [item.lat, item.lng]));
-      map.flyToBounds(bounds, { padding: [60, 60], duration: 1.6 });
+    if (valid.length === 1) {
+      map.flyTo([valid[0].lat, valid[0].lng], 7, { duration: 1.4 });
+      return;
     }
 
-    function activateBridge(bridge, marker) {
-      activeBridge = bridge;
-      renderInfoCard(bridge, bridge.dynasty || "未知", markerLayers.length);
-      drawConnectorToInfo(marker.getLatLng());
-    }
+    const bounds = L.latLngBounds(valid.map(item => [item.lat, item.lng]));
+    map.flyToBounds(bounds, { padding: [60, 60], duration: 1.6 });
+  }
 
-    function renderGroup(index) {
-      currentIndex = index;
-      slider.value = index;
+  function activateBridge(bridge, marker) {
+    activeBridge = bridge;
+    renderInfoCard(bridge, bridge.dynasty || "未知", markerLayers.length);
+    drawConnectorToInfo(marker.getLatLng());
+  }
 
-      const group = timelineGroups[index];
-      if (!group) return;
+  function renderGroup(index) {
+    currentIndex = index;
+    slider.value = index;
 
-      const dynasty = group.dynasty;
-      const list = group.bridges.filter(item => item.lat && item.lng);
+    const group = timelineGroups[index];
+    if (!group) return;
 
-      currentLabel.textContent = dynasty;
-      badge.textContent = dynasty;
+    const dynasty = group.dynasty;
+    const list = group.bridges.filter(item => item.lat && item.lng);
 
-      clearMarkers();
-      clearConnector();
+    currentLabel.textContent = dynasty;
+    badge.textContent = dynasty;
 
-      fitToGroup(list);
+    clearMarkers();
+    clearConnector();
 
-      let firstMarkerForInfo = null;
+    fitToGroup(list);
 
-      list.forEach((bridge, idx) => {
-        const finalStyle = getBridgeMarkerStyle(bridge, "timeline");
+    let firstMarkerForInfo = null;
 
-        const marker = L.circleMarker([bridge.lat, bridge.lng], {
-          radius: 0,
-          color: finalStyle.color,
-          fillColor: finalStyle.fillColor,
-          fillOpacity: finalStyle.fillOpacity,
-          weight: finalStyle.weight
-        }).addTo(map);
+    list.forEach((bridge, idx) => {
+      const finalStyle = getBridgeMarkerStyle(bridge, "timeline");
 
-        markerLayers.push(marker);
+      const marker = L.circleMarker([bridge.lat, bridge.lng], {
+        radius: 0,
+        color: finalStyle.color,
+        fillColor: finalStyle.fillColor,
+        fillOpacity: finalStyle.fillOpacity,
+        weight: finalStyle.weight
+      }).addTo(map);
 
-        setTimeout(() => {
-          marker.setRadius(finalStyle.radius);
-        }, idx * 90);
+      marker.bindPopup(
+        `<strong>${bridge.name || "未命名桥梁"}</strong>${isFeaturedBridge(bridge) ? ' <span style="color:#E6C07B;">★重点桥梁</span>' : ''}<br>` +
+        `朝代：${bridge.dynasty || "未知"}<br>` +
+        `类型：${bridge.type || "未知"}<br>` +
+        `建材：${bridge.material || "未知"}`
+      );
 
-        marker.on("click", () => {
-          activateBridge(bridge, marker);
-          window.location.href = `bridge_detail.html?id=${bridge.id}`;
-        });
+      markerLayers.push(marker);
 
-        marker.on("mouseover", () => {
-          activateBridge(bridge, marker);
-        });
+      setTimeout(() => {
+        marker.setRadius(finalStyle.radius);
+      }, idx * 90);
 
-        if (idx === 0) {
-          firstMarkerForInfo = { bridge, marker };
-        }
+      marker.on("click", () => {
+        activateBridge(bridge, marker);
+        window.location.href = `bridge_detail.html?id=${bridge.id}`;
       });
 
-      if (firstMarkerForInfo) {
-        setTimeout(() => {
-          activateBridge(firstMarkerForInfo.bridge, firstMarkerForInfo.marker);
-        }, 420);
-      } else {
-        renderInfoCard(null, dynasty, 0);
-      }
+      marker.on("mouseover", () => {
+        activateBridge(bridge, marker);
+      });
 
-      renderTimelineTypeChart(list, dynasty);
-    }
-
-    function nextFrame() {
-      let next = currentIndex + 1;
-      if (next >= timelineGroups.length) next = 0;
-      renderGroup(next);
-    }
-
-    slider.addEventListener("input", e => {
-      renderGroup(Number(e.target.value));
-    });
-
-    playPauseBtn.addEventListener("click", () => {
-      isPlaying = !isPlaying;
-      playPauseBtn.textContent = isPlaying ? "暂停" : "播放";
-
-      if (isPlaying) {
-        timer = setInterval(nextFrame, 2200);
-      } else {
-        clearInterval(timer);
+      if (idx === 0) {
+        firstMarkerForInfo = { bridge, marker };
       }
     });
 
-    map.on("move", () => {
+    if (firstMarkerForInfo) {
+      setTimeout(() => {
+        activateBridge(firstMarkerForInfo.bridge, firstMarkerForInfo.marker);
+      }, 420);
+    } else {
+      renderInfoCard(null, dynasty, 0);
+    }
+
+    renderTimelineTypeChart(list, dynasty);
+  }
+
+  function nextFrame() {
+    let next = currentIndex + 1;
+    if (next >= timelineGroups.length) next = 0;
+    renderGroup(next);
+  }
+
+  slider.addEventListener("input", e => {
+    renderGroup(Number(e.target.value));
+  });
+
+  playPauseBtn.addEventListener("click", () => {
+    isPlaying = !isPlaying;
+    playPauseBtn.textContent = isPlaying ? "暂停" : "播放";
+
+    if (isPlaying) {
+      timer = setInterval(nextFrame, 2200);
+    } else {
+      clearInterval(timer);
+    }
+  });
+
+  map.on("move", () => {
+    if (activeBridge && activeBridge.lat && activeBridge.lng) {
+      drawConnectorToInfo([activeBridge.lat, activeBridge.lng]);
+    }
+  });
+
+  window.addEventListener("resize", () => {
+    setTimeout(() => {
+      map.invalidateSize();
+      typeChart.resize();
       if (activeBridge && activeBridge.lat && activeBridge.lng) {
         drawConnectorToInfo([activeBridge.lat, activeBridge.lng]);
       }
-    });
+    }, 200);
+  });
 
-    window.addEventListener("resize", () => {
-      setTimeout(() => {
-        map.invalidateSize();
-        typeChart.resize();
-        if (activeBridge && activeBridge.lat && activeBridge.lng) {
-          drawConnectorToInfo([activeBridge.lat, activeBridge.lng]);
-        }
-      }, 200);
-    });
+  renderGroup(0);
+}
 
-    renderGroup(0);
+async function initTypeSection() {
+  const mapResult = await createChinaGeoMap("typeMap", [35.2, 104.5], 4);
+  const typeMap = mapResult.map;
+
+  const buttons = Array.from(document.querySelectorAll(".filter-btn"));
+  const narrativeDom = document.getElementById("typeNarrative");
+  let layers = [];
+
+  function clearTypeLayers() {
+    layers.forEach(layer => typeMap.removeLayer(layer));
+    layers = [];
   }
 
-  function initTypeSection() {
-    const typeMap = createMutedChinaMap("typeMap", [35.2, 104.5], 4);
+  function renderType(type) {
+    clearTypeLayers();
 
-    const buttons = Array.from(document.querySelectorAll(".filter-btn"));
-    const narrativeDom = document.getElementById("typeNarrative");
-    let layers = [];
+    const list = type === "全部"
+      ? bridgeData
+      : bridgeData.filter(item => (item.type || "").trim() === type);
 
-    function clearTypeLayers() {
-      layers.forEach(layer => typeMap.removeLayer(layer));
-      layers = [];
-    }
+    list.forEach(item => {
+      if (!item.lat || !item.lng) return;
 
-    function renderType(type) {
-      clearTypeLayers();
+      const markerStyle = getBridgeMarkerStyle(item, "type");
 
-      const list = type === "全部"
-        ? bridgeData
-        : bridgeData.filter(item => (item.type || "").trim() === type);
-
-      list.forEach(item => {
-        if (!item.lat || !item.lng) return;
-        const markerStyle = getBridgeMarkerStyle(item, "type");
-
-        const marker = L.circleMarker([item.lat, item.lng], markerStyle)
+      const marker = L.circleMarker([item.lat, item.lng], markerStyle)
         .bindPopup(
           `<strong>${item.name || "未命名桥梁"}</strong>${isFeaturedBridge(item) ? ' <span style="color:#A88447;">★重点桥梁</span>' : ''}<br>` +
           `朝代：${item.dynasty || "未知"}<br>` +
@@ -659,39 +677,38 @@
         )
         .addTo(typeMap);
 
-        layers.push(marker);
-      });
-
-      if (list.length) {
-        const valid = list.filter(item => item.lat && item.lng);
-        if (valid.length > 1) {
-          typeMap.fitBounds(L.latLngBounds(valid.map(item => [item.lat, item.lng])), {
-            padding: [50, 50]
-          });
-        } else if (valid.length === 1) {
-          typeMap.flyTo([valid[0].lat, valid[0].lng], 7);
-        }
-      } else {
-        typeMap.flyTo([35.2, 104.5], 4);
-      }
-
-      narrativeDom.textContent =
-        type === "全部"
-          ? "从整体看，桥梁类型与地域条件存在明显对应关系。平原水网、山地河谷、沿海与民族地区的桥梁形态差异，体现了材料来源、地形限制和社会功能需求的综合作用。"
-          : getTypeNarrative(type);
-
-    }
-
-    buttons.forEach(btn => {
-      btn.addEventListener("click", () => {
-        buttons.forEach(item => item.classList.remove("active"));
-        btn.classList.add("active");
-        renderType(btn.dataset.type);
-      });
+      layers.push(marker);
     });
 
-    renderType("全部");
+    if (list.length) {
+      const valid = list.filter(item => item.lat && item.lng);
+      if (valid.length > 1) {
+        typeMap.fitBounds(L.latLngBounds(valid.map(item => [item.lat, item.lng])), {
+          padding: [50, 50]
+        });
+      } else if (valid.length === 1) {
+        typeMap.flyTo([valid[0].lat, valid[0].lng], 7);
+      }
+    } else {
+      typeMap.setView([35.2, 104.5], 4);
+    }
+
+    narrativeDom.textContent =
+      type === "全部"
+        ? "从整体看，桥梁类型与地域条件存在明显对应关系。平原水网、山地河谷、沿海与民族地区的桥梁形态差异，体现了材料来源、地形限制和社会功能需求的综合作用。"
+        : getTypeNarrative(type);
   }
+
+  buttons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      buttons.forEach(item => item.classList.remove("active"));
+      btn.classList.add("active");
+      renderType(btn.dataset.type);
+    });
+  });
+
+  renderType("全部");
+}
 
   function initFeaturedSection() {
     const grid = document.getElementById("featuredGrid");
@@ -776,17 +793,17 @@
     });
   }
 
-  function initAll() {
-    markSectionsForFade();
-    initOverviewStats();
-    initOverviewMap();
-    initOverviewCharts();
-    initTimelineSection();
-    initTypeSection();
-    initFeaturedSection();
-    initScrollButtons();
-    observeFadeIn();
-  }
+  async function initAll() {
+  markSectionsForFade();
+  initOverviewStats();
+  await initOverviewMap();
+  initOverviewCharts();
+  await initTimelineSection();
+  await initTypeSection();
+  initFeaturedSection();
+  initScrollButtons();
+  observeFadeIn();
+}
 
   document.addEventListener("DOMContentLoaded", () => {
     document.body.classList.add("page-loaded");
